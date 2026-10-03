@@ -295,25 +295,16 @@ static NSImage *mpBird;
 // mpCellClicked copies the drawn card's identity to Go before it can be replaced.
 extern void mpCellClicked(char *id);
 
-// This monitor runs before Wails' monitor (registered later, called first).
-// Consume unmodified cell clicks so the panel is toggled only once.
-// Bird, modified and unrelated clicks retain Wails' handling.
 static CGFloat mpHitW = 0;
-static id mpClickMonitor = nil;
 
-static NSEvent *mpClickTap(NSEvent *event) {
-	if (mpShown == nil || mpHitW == 0) return event;
-	if (event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) return event;
-	NSStatusBarButton *b = mpButton();
-	if (b == nil || event.window != b.window) return event;
-	NSPoint p = [b convertPoint:event.locationInWindow fromView:nil];
-	if (!NSPointInRect(p, b.bounds)) return event;
-	// the button fits its image; allow for it centring a narrower one
-	CGFloat x = p.x - (b.bounds.size.width - mpHitW) / 2;
-	int i = mpCellAt(mpShown, [[NSStatusBar systemStatusBar] thickness], x, mpHitW);
-	if (i < 0) return event;
-	mpCellClicked((char *)[mpShown[i][@"id"] UTF8String]);
-	return nil;
+// Used by the single status-item monitor and native tests. Modified clicks
+// retain the button's normal action; an unmodified quota click uses its ID.
+static BOOL mpClickCell(NSArray *cells, CGFloat h, CGFloat x, CGFloat w, NSEventModifierFlags flags) {
+	if (flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) return NO;
+	int i = mpCellAt(cells, h, x, w);
+	if (i < 0) return NO;
+	mpCellClicked((char *)[cells[i][@"id"] UTF8String]);
+	return YES;
 }
 
 static void mpApply(void) {
@@ -348,11 +339,6 @@ static int mpShow(mpTrayCell *cells, int n, const void *bird, int len) {
 			mpShown = cs;
 			mpBird = [bi retain];
 			mpApply();
-			// the cells are up: their clicks are told apart from the bird's
-			if (mpClickMonitor == nil) {
-				mpClickMonitor = [[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
-					handler:^NSEvent *(NSEvent *e) { return mpClickTap(e); }] retain];
-			}
 			ok = 1;
 		});
 		if (!ok) [cs release];
@@ -406,6 +392,12 @@ static void mpOwnClicks(void) {
 			[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *e) {
 				NSStatusBarButton *b = mpButton();
 				if (b == nil || e.window != b.window) return e;
+				NSPoint p = [b convertPoint:e.locationInWindow fromView:nil];
+				if (!NSPointInRect(p, b.bounds)) return e;
+				// Route quota clicks before the generic action, within this
+				// one monitor; local monitor ordering is not guaranteed.
+				CGFloat x = p.x - (b.bounds.size.width - mpHitW) / 2;
+				if (mpClickCell(mpShown, [[NSStatusBar systemStatusBar] thickness], x, mpHitW, e.modifierFlags)) return nil;
 				[NSApp sendAction:b.action to:b.target from:b];
 				return nil;
 			}];
@@ -471,13 +463,10 @@ static CGFloat mpCellStartAt(mpTrayCell *cells, int n, CGFloat h, int i) {
 }
 
 // Exercise the same identity lookup and C-to-Go callback without a live status item.
-static int mpClickCellsAt(mpTrayCell *cells, int n, CGFloat h, CGFloat x) {
+static int mpClickCellsAt(mpTrayCell *cells, int n, CGFloat h, CGFloat x, unsigned long flags) {
 	@autoreleasepool {
 		NSArray *cs = mpCells(cells, n);
-		int i = mpCellAt(cs, h, x, mpWidth(cs, h));
-		if (i < 0) return 0;
-		mpCellClicked((char *)[cs[i][@"id"] UTF8String]);
-		return 1;
+		return mpClickCell(cs, h, x, mpWidth(cs, h), flags);
 	}
 }
 
@@ -585,6 +574,8 @@ func cBool(b bool) C.int {
 	return 0
 }
 
+// These native test wrappers stay here because Go does not support cgo
+// imports in _test.go files. They do not install monitors or create windows.
 // trayImageCellAt tests the native hit map; -1 means no quota cell.
 func trayImageCellAt(cells []trayCell, h, x float64) int {
 	at := -1
@@ -603,10 +594,10 @@ func trayImageCellStart(cells []trayCell, h float64, i int) float64 {
 	return s
 }
 
-func trayImageClickAt(cells []trayCell, h, x float64) bool {
+func trayImageClickAt(cells []trayCell, h, x float64, modifiers uint64) bool {
 	hit := false
 	withCells(cells, func(cs *C.mpTrayCell, count C.int) {
-		hit = C.mpClickCellsAt(cs, count, C.CGFloat(h), C.CGFloat(x)) != 0
+		hit = C.mpClickCellsAt(cs, count, C.CGFloat(h), C.CGFloat(x), C.ulong(modifiers)) != 0
 	})
 	return hit
 }

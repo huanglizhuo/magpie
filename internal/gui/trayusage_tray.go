@@ -107,8 +107,9 @@ func (h *host) trayCellClick(id string) {
 		h.ShowMain(quotaView(id))
 		return
 	}
-	if !h.panel.IsVisible() {
-		h.panel.ExecJS(panelQuotaJS(id))
+	w, _ := h.panelWin()
+	if !w.IsVisible() {
+		w.ExecJS(panelQuotaJS(id))
 	}
 	h.togglePanel()
 }

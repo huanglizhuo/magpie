@@ -4,6 +4,8 @@ const $$ = (s) => document.querySelectorAll(s);
 const params = new URLSearchParams(location.search);
 const mode = params.get("mode") || "window";
 document.body.classList.add(mode);
+// The panel loads Wails for ExecJS readiness, but stays attached to the tray.
+if (mode === "panel") $("header.top").style.setProperty("--wails-draggable", "no-drag");
 // `magpie web`: the page in a browser tab, with no window of the app's
 // around it — it opens links itself, and what is the desktop's is left out
 const web = !!window.bootPrefs?.web;
@@ -9153,12 +9155,15 @@ function usageMore(provider, more, folded, cls) {
   b.type = "button";
   b.setAttribute("aria-expanded", String(!folded));
   b.onclick = () => {
-    if (folded) usageOpen.add(provider); else usageOpen.delete(provider);
-    try { localStorage.setItem("magpie.usageOpen", JSON.stringify([...usageOpen])); } catch {}
-    renderQuotas();
+    setUsageOpen(provider, folded);
     if (mode !== "panel") backToReader($("#view-usage"));
   };
   return b;
+}
+function setUsageOpen(provider, open) {
+  if (open) usageOpen.add(provider); else usageOpen.delete(provider);
+  try { localStorage.setItem("magpie.usageOpen", JSON.stringify([...usageOpen])); } catch {}
+  renderQuotas();
 }
 
 // The Usage page's cards in the order they were dragged to (settings
@@ -9566,11 +9571,18 @@ function keepQuotaFlash(box) {
 // Keep the request until quota data has produced the target's DOM node.
 function focusQuotaCard() {
   if (!quotaFocus) return;
+  if (performance.now() > quotaFocusUntil) { quotaFocus = ""; return; }
   const box = mode === "panel" ? $("#panelQuota") : $("#subscriptionUsage");
   if (mode === "panel") setPanelTab("usage");
   else if (view !== "usage" || usageTab !== "usage") return;
   const id = CSS.escape(quotaFocus);
   const target = box.querySelector(`[data-card="${id}"]`) || box.querySelector(`[data-provider="${id}"]`);
+  // The panel omits folded accounts; the main window renders them hidden.
+  const quota = quotas?.find((q) => trayCardID(q) === quotaFocus);
+  if (quota?.user && !usageOpen.has(quota.provider) && (!target || target.hidden)) {
+    setUsageOpen(quota.provider, true);
+    return; // the redraw queues focus once the account is visible
+  }
   if (!target) {
     if (quotas && !quotasLoading) quotaFocus = "";
     return;
@@ -9583,6 +9595,7 @@ function focusQuotaCard() {
 function panelQuotaFocus(id) {
   if (mode !== "panel") return;
   quotaFocus = id;
+  quotaFocusUntil = performance.now() + 5000;
   setPanelTab("usage");
   requestAnimationFrame(focusQuotaCard);
 }
@@ -11267,6 +11280,7 @@ function renderLedger() {
 const USAGE_TABS = [["usage", "Overview"], ["requests", "Requests"], ["sessions", "Sessions"]];
 let usageTab = "usage";
 let quotaFocus = ""; // pending provider/account card requested by the menu bar
+let quotaFocusUntil = 0; // expire before a late quota response can move the reader
 try { const k = localStorage.getItem("magpie.usageTab"); if (USAGE_TABS.some(([id]) => id === k)) usageTab = k; } catch {}
 let sessions = null; // { sessions, terminal, dirs }
 let sessAgent = "all";
@@ -14136,7 +14150,8 @@ function savePrefs(body) {
 // (from a load, a timer, a helper that other clicks share) it is refused,
 // and whatever scroll follows is put back.
 let purposeUntil = 0, held = null;
-const readerScrolls = (ms) => { purposeUntil = Math.max(purposeUntil, performance.now() + ms); held = null; };
+// A new purposeful scroll supersedes any still-pending quota navigation.
+const readerScrolls = (ms) => { quotaFocus = ""; purposeUntil = Math.max(purposeUntil, performance.now() + ms); held = null; };
 function scrollOnPurpose(e, ms = 1000) {
   if (!e?.isTrusted || performance.now() - e.timeStamp > 1000) {
     console.warn("magpie: a scroll not asked for by the reader was refused");
@@ -14806,6 +14821,7 @@ if (mode === "window" && params.get("view") === "usage") {
   const tab = params.get("tab");
   if (tab === "requests" || tab === "usage") usageTab = tab;
   quotaFocus = usageTab === "usage" ? (params.get("card") || params.get("provider") || "") : "";
+  quotaFocusUntil = performance.now() + 5000;
   ledProvider = params.get("provider") || "";
   ledAgent = params.get("agent") || "";
   ledComputer = params.get("computer") || "";

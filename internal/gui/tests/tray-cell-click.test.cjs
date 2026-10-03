@@ -82,6 +82,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const panel = await open("http://magpie.test/?mode=panel", { width: 440, height: 640 });
       await panel.waitForFunction(() => document.querySelectorAll("#panelQuota .pq-card").length >= 4);
       await panel.waitForFunction(() => window.__runtimeReady === true); // native ExecJS can now drain
+      assert.equal(await panel.locator("header.top").evaluate((e) => getComputedStyle(e).getPropertyValue("--wails-draggable").trim()), "no-drag", "the runtime must not make the panel draggable");
       assert.equal(await panel.evaluate(() => typeof panelQuotaFocus), "function", "panelQuotaFocus is Go's to call by name");
       assert.equal(await panel.evaluate(() => document.body.dataset.ptab), "agents", "the panel starts on its agents");
       await panel.evaluate(() => panelQuotaFocus("codex|x@y.z"));
@@ -136,9 +137,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await visible(slow, '#panelQuota [data-card="kimi"]');
 
       await panel.emulateMedia({ reducedMotion: "reduce" });
+      assert.equal(await panel.locator('#panelQuota [data-card="codex|other-5@例子.test"]').count(), 0, "the requested account starts folded");
       await panel.evaluate(() => panelQuotaFocus("codex|other-5@例子.test"));
       await panel.waitForFunction(() => window.__scrolled.at(-1) === "codex|other-5@例子.test");
       await visible(panel, '#panelQuota [data-card="codex|other-5@例子.test"]');
+      assert.deepEqual(await panel.evaluate(() => JSON.parse(localStorage.getItem("magpie.usageOpen"))), ["codex"], "navigation remembers the expanded provider");
       await panel.waitForFunction(() => !document.querySelector('#panelQuota [data-card="codex|other-5@例子.test"]').classList.contains("flash"));
 
       // no allowances to show: no tab to pick, the panel keeps its agents
@@ -171,9 +174,37 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await account.waitForFunction(() => document.querySelector('.subscription-card[data-provider="codex"]')?.classList.contains("flash"));
       assert.deepEqual(await account.evaluate(() => window.__scrolled.slice(-1)), [id]);
       await visible(account, '.subscription-account[data-card="codex|other-5@例子.test"]');
+      assert.deepEqual(await account.evaluate(() => JSON.parse(localStorage.getItem("magpie.usageOpen"))), ["codex"]);
       assert.equal(await account.evaluate(() => location.search.includes("card=")), false);
       await account.waitForFunction(() => !document.querySelector('.subscription-card[data-provider="codex"]').classList.contains("flash"));
       await visible(account, '.subscription-account[data-card="codex|other-5@例子.test"]');
+
+      // A slow response must not pull the reader back after the request expires.
+      let finish;
+      const expired = await open("http://magpie.test/?mode=panel", { width: 440, height: 300 }, [], false, new Promise((resolve) => { finish = resolve; }));
+      await expired.waitForFunction(() => typeof panelQuotaFocus === "function");
+      await expired.clock.install();
+      await expired.evaluate(() => panelQuotaFocus("codex|other-5@例子.test"));
+      await expired.clock.fastForward(6000);
+      finish();
+      await expired.waitForFunction(() => document.querySelector('#panelQuota [data-card="kimi"]'));
+      await expired.evaluate(() => new Promise(requestAnimationFrame));
+      assert.deepEqual(await expired.evaluate(() => window.__scrolled), [], "expired requests cannot scroll or expand accounts");
+      assert.equal(await expired.locator('#panelQuota [data-card="codex|other-5@例子.test"]').count(), 0);
+
+      // A purposeful user scroll supersedes a still-pending menu-bar request.
+      let resume;
+      const scrolled = await open("http://magpie.test/?mode=panel", { width: 440, height: 300 }, [], false, new Promise((resolve) => { resume = resolve; }));
+      await scrolled.waitForFunction(() => typeof panelQuotaFocus === "function");
+      await scrolled.evaluate(() => panelQuotaFocus("kimi"));
+      await scrolled.mouse.move(200, 150);
+      await scrolled.mouse.wheel(0, 200);
+      // Flush input delivery before allowing the data to arrive.
+      await scrolled.waitForFunction(() => !quotaFocus);
+      resume();
+      await scrolled.waitForFunction(() => document.querySelector('#panelQuota [data-card="kimi"]'));
+      await scrolled.evaluate(() => new Promise(requestAnimationFrame));
+      assert.deepEqual(await scrolled.evaluate(() => window.__scrolled), [], "manual scrolling cancels pending navigation");
 
       assert.deepEqual(errors, []);
     });

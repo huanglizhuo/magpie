@@ -233,11 +233,17 @@ func TestTrayImageClickIdentity(t *testing.T) {
 	cards[1].User = "a\"b\\c@例子.test"
 	cells, _, _ := trayUsageView(cards, time.Now(), false)
 	for _, layout := range [][]trayCell{cells, trayPlain(cells)} {
-		if trayImageClickAt(layout, 22, 5) {
+		if trayImageClickAt(layout, 22, 5, 0) {
 			t.Fatal("bird intercepted")
 		}
 		x := trayImageCellStart(layout, 22, 1) + 1
-		if !trayImageClickAt(layout, 22, x) {
+		// AppKit's Shift, Control, Option and Command modifier bits.
+		for _, modifiers := range []uint64{1 << 17, 1 << 18, 1 << 19, 1 << 20} {
+			if trayImageClickAt(layout, 22, x, modifiers) {
+				t.Fatal("modified click intercepted")
+			}
+		}
+		if !trayImageClickAt(layout, 22, x, 0) {
 			t.Fatal("cell missed")
 		}
 		select {
