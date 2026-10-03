@@ -449,6 +449,15 @@ Off posts `trayNoLogos: true`, a save of another setting keeps it, On posts it
 back; the row has no left-border stripe, no click moves the page, and there is
 no row with no card picked nor off a Mac; in English and Chinese.
 
+`tray-cell-click.test.cjs` checks menu-bar quota navigation in the panel
+and main window: selecting Allowances/Overview, scrolling to and highlighting
+the matching account or balance, and keeping a click pending while quotas
+load. It checks that the panel loads Wails so native ExecJS can run.
+A focus-triggered redraw preserves
+the remaining highlight animation in both panel and main window. It checks
+English and Chinese in Chromium and WebKit, with a mocked API. Run with
+`node --test internal/gui/tests/tray-cell-click.test.cjs`.
+
 `text-size.test.cjs` checks the Settings page's Text size row (100, 110,
 125 and 150%): a pick posts to /api/settings/text-size without scrolling
 the page, stays picked after a reload (boot.js carries it, and the page's
