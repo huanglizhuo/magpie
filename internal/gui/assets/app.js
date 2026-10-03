@@ -1984,6 +1984,8 @@ async function whatsNewOnce() {
 
 // openWhatsNew is Settings' way back to the notes: the current version's (or
 // those since the last update), after the waiting update's when u has one.
+// The notes that couldn't be had (the site failing, #661) say so, with a
+// retry and the release page, apart from a version that has none.
 async function openWhatsNew(u, b) {
   if (b) { b.disabled = true; b.classList.add("busy"); }
   const w = await api(updatePath("whatsnew?all=1")).catch(() => null);
@@ -1992,16 +1994,20 @@ async function openWhatsNew(u, b) {
   if (u?.notes && u.latest && ["ready", "available", "downloading"].includes(u.state) && !list.some((r) => r.version === u.latest)) {
     list.unshift({ version: u.latest, notes: u.notes, url: u.url, pending: true });
   }
-  if (!list.length) return status(t("Couldn't load the release notes"), "err");
-  showWhatsNew(list);
+  const failed = !w || !!w.error;
+  if (!list.length && !w?.current) return status(t("Couldn't load the release notes"), "err");
+  showWhatsNew(list, false, { failed, current: w?.current, url: w?.url, retry: () => openWhatsNew(u) });
 }
 
 // auto: shown by itself after an update, with "Don't show again today"
 // (#525: releases come many a day); Settings' row opens it without one.
-function showWhatsNew(releases, auto) {
+// more (from Settings): failed, the current version's notes couldn't be
+// had, retry asks again; current and url, the version and its release
+// page, for a dialog with no notes.
+function showWhatsNew(releases, auto, more = {}) {
   const ed = el("div", "editor whatsnew");
   const head = el("div", "ehead");
-  head.append(el("b", "", t("What's new in {v}", { v: "v" + releases[0].version })));
+  head.append(el("b", "", t("What's new in {v}", { v: "v" + (releases[0]?.version || more.current) })));
   ed.append(head);
   for (const r of releases) {
     const sec = el("section", "wn-rel");
@@ -2009,6 +2015,26 @@ function showWhatsNew(releases, auto) {
     h.append(el("b", "", "v" + r.version));
     if (r.pending) h.append(el("span", "badge", t("Not installed yet")));
     sec.append(h, noteBlocks(r.notes));
+    ed.append(sec);
+  }
+  if (more.failed || !releases.length) {
+    const sec = el("section", "wn-rel wn-none" + (more.failed ? " wn-failed" : ""));
+    const h = el("div", "wn-ver");
+    if (more.current) h.append(el("b", "", "v" + more.current));
+    const p = el("p", "wn-msg", more.failed ? t("Couldn't load the release notes") : t("No release notes provided."));
+    const acts = el("div", "wn-acts");
+    if (more.failed && more.retry) {
+      const again = el("button", "text", t("Try again"));
+      again.onclick = async (e) => {
+        e.stopPropagation();
+        again.disabled = true;
+        again.classList.add("busy");
+        await more.retry();
+      };
+      acts.append(again);
+    }
+    if (more.url) acts.append(noteLink(t("Open the release page"), more.url));
+    sec.append(h, p, acts);
     ed.append(sec);
   }
   const bar = el("div", "bar");
@@ -9044,6 +9070,9 @@ function renderQuotas() {
   }
   for (const subs of groups) {
     const first = subs[0];
+    // several accounts: one in sight, the others behind a button (whqtian)
+    const folded = subs.length > 1 && !usageOpen.has(first.provider);
+    const pick = folded ? usageShown(subs) : null;
     const card = el("div", "subscription-card" + (first.user ? " several" : ""));
     card.dataset.key = first.provider;
     card.dataset.provider = first.provider;
@@ -9053,6 +9082,7 @@ function renderQuotas() {
     if (!first.user && (first.plan || first.until)) head.append(planSpan(first));
     card.append(head);
     for (const sub of subs) {
+      const from = card.childElementCount;
       // "Every model" by the account, or the card's name: where the click
       // was, whichever way the meters under it grow or shrink
       const [meters, every] = familyQuota(sub);
@@ -9093,11 +9123,42 @@ function renderQuotas() {
         }
         card.append(r);
       }
+      if (folded && sub !== pick) for (const n of [...card.children].slice(from)) n.hidden = true;
     }
+    if (subs.length > 1) card.append(usageMore(first.provider, subs.length - 1, folded, "text quota-more"));
     subscriptions.append(card);
   }
   restoreFlash();
   requestAnimationFrame(focusQuotaCard);
+}
+
+// A subscription with several accounts shows one of them, the others behind
+// a button (whqtian on Discord: 只显示一个账号即可，其他的可以点击展开): the
+// one that answered last, else the first. Opened is remembered by provider,
+// for the window and the tray panel alike.
+let usageOpen = new Set();
+try { usageOpen = new Set(JSON.parse(localStorage.getItem("magpie.usageOpen") || "[]")); } catch {}
+addEventListener("storage", (e) => {
+  if (e.key !== "magpie.usageOpen") return;
+  try { usageOpen = new Set(JSON.parse(e.newValue || "[]")); } catch {}
+  renderQuotas();
+});
+function usageShown(subs) {
+  let pick = subs[0];
+  for (const q of subs) if (q.lastServedAt && (!pick.lastServedAt || q.lastServedAt > pick.lastServedAt)) pick = q;
+  return pick;
+}
+function usageMore(provider, more, folded, cls) {
+  const b = el("button", cls, folded ? t(more === 1 ? "Show 1 more account" : "Show {n} more accounts", { n: more }) : t("Show fewer accounts"));
+  b.type = "button";
+  b.setAttribute("aria-expanded", String(!folded));
+  b.onclick = () => {
+    if (folded) usageOpen.add(provider); else usageOpen.delete(provider);
+    try { localStorage.setItem("magpie.usageOpen", JSON.stringify([...usageOpen])); } catch {}
+    renderQuotas();
+    if (mode !== "panel") backToReader($("#view-usage"));
+  };
+  return b;
 }
 
 // The Usage page's cards in the order they were dragged to (settings
@@ -9794,7 +9855,10 @@ function renderPanelQuota() {
       head.append(m);
     }
     g.append(head);
-    for (const q of qs) g.append(panelQuotaCard(q));
+    const folded = qs.length > 1 && !usageOpen.has(qs[0].provider);
+    const pick = folded ? usageShown(qs) : null;
+    for (const q of qs) if (!folded || q === pick) g.append(panelQuotaCard(q));
+    if (qs.length > 1) g.append(usageMore(qs[0].provider, qs.length - 1, folded, "pq-more"));
     box.append(g);
   }
   if (bals.length) {
