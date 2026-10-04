@@ -4,6 +4,7 @@ One place to pick every agent's model: Codex on DeepSeek, Claude Code
 on Kimi, Gemini CLI on GLM, from the menu bar. [usemagpie.ai](https://usemagpie.ai)
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF)
+[![SLOC](https://api.octocounts.com/badge/huanglizhuo/magpie)](https://octocounts.com/github/huanglizhuo/magpie/tree/main)
 
 `magpie` is a single screen that lists each AI agent on your machine and
 the model it is set to. Click a value, pick a model. That is the whole app.
